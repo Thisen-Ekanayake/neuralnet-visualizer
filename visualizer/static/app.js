@@ -264,7 +264,8 @@ function renderTrainStatus() {
   const epoch = state.stats?.epoch ?? 0;
   const p = state.lastProgress;
   if (state.training) {
-    status.textContent = p ? `Training on the GPU… epoch ${p.epoch.toFixed(2)}` : 'Training on the GPU…';
+    const where = `Training on the ${serverDeviceKind.toUpperCase()}…`;
+    status.textContent = p ? `${where} epoch ${p.epoch.toFixed(2)}` : where;
   } else if (epoch > 0) {
     status.textContent = `Trained for ${epoch.toFixed(2)} epochs. "Train more" continues from these weights.`;
   } else {
@@ -491,6 +492,7 @@ $('auto-rotate').addEventListener('change', (e) => scene.setAutoRotate(e.target.
 let ws = null;
 let connected = false;
 let serverDevice = '…';
+let serverDeviceKind = 'server';
 
 function send(message) {
   if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify(message));
@@ -548,6 +550,7 @@ function onWeights(buffer) {
 function onMessage(msg) {
   if (msg.type === 'hello') {
     serverDevice = msg.device;
+    serverDeviceKind = msg.deviceKind;
     MAX_LAYERS = msg.maxLayers;
     MAX_UNITS = msg.maxUnits;
     updateHud();
@@ -588,7 +591,7 @@ function updateHud() {
   const neurons = sizes().reduce((a, b) => a + b, 0);
   $('hud').textContent = [
     `Render  ${gpuName} · ${scene.fps} fps`,
-    `Train   ${serverDevice} (PyTorch)`,
+    `Train   ${serverDeviceKind.toUpperCase()} · ${serverDevice} (PyTorch)`,
     `Scene   ${fmt(neurons)} neurons · ${fmt(scene.edgeDrawn)} of ${fmt(scene.edgeTotal)} connections drawn`,
   ].join('\n');
 }

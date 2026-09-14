@@ -1,6 +1,6 @@
 # NeuralNet
 
-Small experiments on how a fully connected neural network's **width** (neurons per hidden layer) and **depth** (number of hidden layers) affect MNIST accuracy, plus an interactive **3D visualizer** that trains networks on the GPU and shows their weights, activations, and dead neurons live.
+Small experiments on how a fully connected neural network's **width** (neurons per hidden layer) and **depth** (number of hidden layers) affect MNIST accuracy, plus an interactive **3D visualizer** that trains networks on the GPU or CPU and shows their weights, activations, and dead neurons live.
 
 ## Contents
 
@@ -103,23 +103,27 @@ python3 scripts/depth_experiment.py --width 2 --plot depth_accuracy_w2.png
 ## 3D visualizer
 
 ```bash
-python3 visualizer/server.py              # then open http://127.0.0.1:8000
-python3 visualizer/server.py --port 8080  # different port
+python3 visualizer/server.py              # GPU if PyTorch can see one, otherwise CPU; then open http://127.0.0.1:8000
+python3 visualizer/server.py --gpu        # train on the GPU (exits with an error if CUDA isn't available)
+python3 visualizer/server.py --cpu        # train on the CPU
+python3 visualizer/server.py --cpu --port 8080
 ```
 
-Leave the server running while you use the page. It loads MNIST onto the GPU at startup, and each browser tab gets its own model.
+The flag only controls where the server trains. The browser always draws the 3D view with WebGL on its own GPU.
+
+Leave the server running while you use the page. It loads MNIST onto the chosen device at startup, prints which device it is using (the GPU's name and memory, or the CPU's model and PyTorch thread count), and each browser tab gets its own model.
 
 **Left panel: build and train**
 - Pick a preset (including the networks from the experiments above), or set the number of hidden layers (0–8), the neurons in each layer (1–256), and each layer's activation: ReLU, Leaky ReLU, GELU, Tanh, Sigmoid, or Linear.
 - The parameter count updates immediately, with a per-layer weights/biases table.
-- **Train** runs on the GPU. **Speed** defaults to about 5 seconds per epoch so you can watch the network learn; *Full GPU speed* finishes a small network's epoch in under a second. **Train more** continues from the current weights, **Reinitialize** starts over with new random weights, and any architecture change also starts fresh.
+- **Train** runs on the server's device. **Speed** defaults to about 5 seconds per epoch so you can watch the network learn; *Full speed* trains as fast as the device allows. **Train more** continues from the current weights, **Reinitialize** starts over with new random weights, and any architecture change also starts fresh.
 
 **Center: the 3D network**
 - Drag to orbit, right-drag to pan, scroll to zoom. The buttons at the top jump to preset camera angles or turn on auto-rotation.
 - The input layer is a 28×28 grid showing the current digit. Neurons glow by activation (amber positive, cyan negative). Output neurons grow with their predicted probability.
 - Connections are blue for positive weights and orange for negative, brighter for larger weights.
 - Hover a neuron for its activation, bias, and firing rate. Click it to highlight its connections and show its details on the right.
-- The bottom-left panel shows which GPU the browser is rendering on, the frame rate, and how many connections are drawn.
+- The bottom-left panel shows which GPU the browser is rendering on and the frame rate, which device the server trains on (GPU name and memory, or CPU model and thread count), and how many connections are drawn.
 
 **Right panel: inspect**
 - **Connections:** color by weight, or by *signal* (weight × input for the current digit) to see which paths the digit actually uses. You can hide weak weights, adjust brightness, and cap how many lines are drawn (large networks are randomly subsampled above the cap, 150k by default, up to 700k).
