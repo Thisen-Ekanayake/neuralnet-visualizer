@@ -3,8 +3,9 @@ const TRAIN_ACC_COLOR = 'rgba(110, 168, 255, 0.45)';
 const TEST_ACC_COLOR = '#6ea8ff';
 
 export class TrainingChart {
-  constructor(canvas) {
+  constructor(canvas, { software = false } = {}) {
     this.canvas = canvas;
+    this.software = software;
     this.pending = false;
     this.reset();
     new ResizeObserver(() => this.schedule()).observe(canvas);
@@ -41,7 +42,7 @@ export class TrainingChart {
     if (!w || !h) return;
     canvas.width = Math.round(w * dpr);
     canvas.height = Math.round(h * dpr);
-    const ctx = canvas.getContext('2d');
+    const ctx = canvas.getContext('2d', { willReadFrequently: this.software });
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, w, h);
 

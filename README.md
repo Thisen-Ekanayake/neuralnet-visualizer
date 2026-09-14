@@ -13,7 +13,8 @@ visualizer/
   server.py                  FastAPI server: trains models with PyTorch, streams state over a WebSocket
   trainer.py                 Model definition, training thread, dead-neuron detection
   mnist_data.py              IDX-format MNIST loader
-  static/                    three.js page (three.js is vendored in static/vendor, so no internet is needed)
+  static/                    The page: scene.js draws with WebGL, scene_cpu.js with a CPU canvas
+                             (three.js is vendored in static/vendor, so no internet is needed)
 *.png                        Plots and a sample digit produced by the scripts
 ```
 
@@ -104,12 +105,18 @@ python3 scripts/depth_experiment.py --width 2 --plot depth_accuracy_w2.png
 
 ```bash
 python3 visualizer/server.py              # GPU if PyTorch can see one, otherwise CPU; then open http://127.0.0.1:8000
-python3 visualizer/server.py --gpu        # train on the GPU (exits with an error if CUDA isn't available)
-python3 visualizer/server.py --cpu        # train on the CPU
+python3 visualizer/server.py --gpu        # train on the GPU, render with WebGL (exits with an error if CUDA isn't available)
+python3 visualizer/server.py --cpu        # train on the CPU, render on the CPU
 python3 visualizer/server.py --cpu --port 8080
 ```
 
-The flag only controls where the server trains. The browser always draws the 3D view with WebGL on its own GPU.
+| | Training (server) | 3D rendering (browser) |
+|---|---|---|
+| `--gpu`, or no flag with CUDA available | PyTorch on the GPU | WebGL on the GPU, redrawn every frame |
+| `--cpu` | PyTorch on the CPU | Software Canvas 2D on the CPU, redrawn only when something changes |
+| no flag, no CUDA | PyTorch on the CPU | WebGL on the GPU |
+
+CPU rendering creates no WebGL context. It draws into a canvas created with `willReadFrequently`, a hint that makes Chrome/Chromium keep the canvas in CPU memory and rasterize it in software (verified in Chrome; other browsers may treat the hint differently). It uses the same layout, colors, and interactions as the WebGL view, but at 1× resolution, and it draws at most 40k connections by default (every connection of 784→50→10). Expect roughly 15–40 fps while orbiting, depending on network size. The "Max connections drawn" slider goes up to 150k in this mode (roughly 100–250 ms per frame, depending on how long the lines are on screen). The browser still uses the GPU to put the finished page on screen, which a web page can't control.
 
 Leave the server running while you use the page. It loads MNIST onto the chosen device at startup, prints which device it is using (the GPU's name and memory, or the CPU's model and PyTorch thread count), and each browser tab gets its own model.
 
@@ -123,7 +130,7 @@ Leave the server running while you use the page. It loads MNIST onto the chosen 
 - The input layer is a 28×28 grid showing the current digit. Neurons glow by activation (amber positive, cyan negative). Output neurons grow with their predicted probability.
 - Connections are blue for positive weights and orange for negative, brighter for larger weights.
 - Hover a neuron for its activation, bias, and firing rate. Click it to highlight its connections and show its details on the right.
-- The bottom-left panel shows which GPU the browser is rendering on and the frame rate, which device the server trains on (GPU name and memory, or CPU model and thread count), and how many connections are drawn.
+- The bottom-left panel shows what renders the view (the browser's GPU and frame rate, or the CPU and milliseconds per frame), which device the server trains on (GPU name and memory, or CPU model and thread count), and how many connections are drawn.
 
 **Right panel: inspect**
 - **Connections:** color by weight, or by *signal* (weight × input for the current digit) to see which paths the digit actually uses. You can hide weak weights, adjust brightness, and cap how many lines are drawn (large networks are randomly subsampled above the cap, 150k by default, up to 700k).
@@ -134,6 +141,7 @@ Leave the server running while you use the page. It loads MNIST onto the chosen 
 
 ## Troubleshooting
 
+- **CPU mode feels slow when orbiting.** Lower "Max connections drawn" or raise "Hide weak weights"; drawing time scales with the number of visible lines.
 - **The visualizer renders on the integrated GPU.** The bottom-left panel shows the browser's GPU. On a hybrid-graphics Linux laptop, start the browser on the NVIDIA GPU, for example `prime-run google-chrome-stable` (from the `nvidia-prime` package on Arch).
 - **The experiment scripts exit with code 139 and a `Gdk-CRITICAL` message.** This happens as matplotlib's GTK backend shuts down, after the results table and plot have already been written. The results are fine.
 - **`FileNotFoundError` for an `.idx` file.** Check the dataset names and location in [MNIST dataset](#2-mnist-dataset).

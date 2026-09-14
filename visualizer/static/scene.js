@@ -6,7 +6,7 @@ const INPUT_SPACING = 0.26;
 const HIDDEN_SPACING = 0.62;
 const OUTPUT_SPACING = 0.8;
 
-const COLORS = {
+export const COLORS = {
   background: new THREE.Color('#0b0f17'),
   idle: new THREE.Color('#465068'),
   positive: new THREE.Color('#ffc861'),
@@ -73,7 +73,7 @@ function layoutLayer(n, kind, x) {
 function textSprite(title, subtitle = '') {
   const canvas = document.createElement('canvas');
   canvas.width = 512; canvas.height = subtitle ? 150 : 96;
-  const ctx = canvas.getContext('2d');
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
   ctx.font = '600 58px system-ui, sans-serif';
   const width = Math.min(500, Math.max(ctx.measureText(title).width + 48, subtitle ? 330 : 0));
   ctx.fillStyle = 'rgba(11, 15, 23, 0.72)';
@@ -104,8 +104,7 @@ export class NetworkScene {
     this.onHover = onHover;
     this.onSelect = onSelect;
 
-    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    this.initRenderer(canvas);
     this.scene = new THREE.Scene();
     this.scene.background = COLORS.background;
     this.camera = new THREE.PerspectiveCamera(42, 1, 0.1, 5000);
@@ -149,28 +148,48 @@ export class NetworkScene {
     this.resize();
 
     let frames = 0, last = performance.now();
-    this.renderer.setAnimationLoop(() => {
-      this.controls.update();
+    const loop = () => {
+      requestAnimationFrame(loop);
+      const moved = this.controls.update();
+      this.camera.updateMatrixWorld();
       if (this.needsPick) this.pick();
-      this.renderer.render(this.scene, this.camera);
-      frames++;
+      if (this.render(moved)) frames++;
       const now = performance.now();
       if (now - last >= 500) { this.fps = Math.round(frames * 1000 / (now - last)); frames = 0; last = now; }
-    });
+    };
+    requestAnimationFrame(loop);
   }
 
-  get gpuName() {
+  initRenderer(canvas) {
+    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  }
+
+  get rendererName() {
     const gl = this.renderer.getContext();
     const ext = gl.getExtension('WEBGL_debug_renderer_info');
-    return ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER);
+    const name = ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER);
+    return `GPU · ${name.replace(/\s*\(0x[0-9a-f]+\)/i, '').slice(0, 90)}`;
   }
+
+  get perfText() { return `${this.fps} fps`; }
+
+  setSize(w, h) { this.renderer.setSize(w, h, false); }
+
+  render() {
+    this.renderer.render(this.scene, this.camera);
+    return true;
+  }
+
+  invalidate() {}
 
   resize() {
     const w = this.canvas.clientWidth, h = this.canvas.clientHeight;
     if (!w || !h) return;
-    this.renderer.setSize(w, h, false);
+    this.setSize(w, h);
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
+    this.invalidate();
   }
 
   clear() {
@@ -198,9 +217,10 @@ export class NetworkScene {
       const kind = li === 0 ? 'input' : li === sizes.length - 1 ? 'output' : 'hidden';
       const x = li * LAYER_GAP - span / 2;
       const positions = layoutLayer(n, kind, x);
+      const radius = kind === 'input' ? 0.11 : kind === 'output' ? 0.3 : 0.21;
       const geometry = kind === 'input'
-        ? new THREE.BoxGeometry(0.05, 0.22, 0.22)
-        : new THREE.SphereGeometry(kind === 'output' ? 0.3 : 0.21, 20, 14);
+        ? new THREE.BoxGeometry(0.05, radius * 2, radius * 2)
+        : new THREE.SphereGeometry(radius, 20, 14);
       const mesh = new THREE.InstancedMesh(geometry, new THREE.MeshLambertMaterial({ color: 0xffffff }), n);
       mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
       this.root.add(mesh);
@@ -222,7 +242,7 @@ export class NetworkScene {
           this.root.add(digit);
         }
       }
-      return { kind, n, x, positions, mesh, halfHeight };
+      return { kind, n, x, positions, mesh, halfHeight, radius };
     });
 
     this.buildLinks(maxEdges);
@@ -291,6 +311,7 @@ export class NetworkScene {
     this.camera.position.copy(target).addScaledVector(dir, distance);
     this.controls.target.copy(target);
     this.controls.update();
+    this.invalidate();
   }
 
   setAutoRotate(on) { this.controls.autoRotate = on; }
@@ -350,6 +371,7 @@ export class NetworkScene {
       mesh.instanceMatrix.needsUpdate = true;
       mesh.instanceColor.needsUpdate = true;
     });
+    this.invalidate();
   }
 
   colorEdges() {
@@ -409,6 +431,7 @@ export class NetworkScene {
       }
       link.colorAttr.needsUpdate = true;
     }
+    this.invalidate();
   }
 
   onPointerMove(e) {

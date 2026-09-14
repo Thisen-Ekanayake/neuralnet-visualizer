@@ -26,6 +26,7 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 DEVICE = None
 DEVICE_KIND = None
 DEVICE_DETAILS = None
+RENDER = "gpu"
 DATA = None
 
 
@@ -53,6 +54,11 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 @app.get("/")
 def index():
     return FileResponse(STATIC_DIR / "index.html")
+
+
+@app.get("/api/config")
+def config():
+    return {"render": RENDER}
 
 
 async def handle(session, msg):
@@ -114,11 +120,15 @@ async def websocket_endpoint(ws: WebSocket):
 
 
 def main():
-    global DATA, DEVICE, DEVICE_KIND, DEVICE_DETAILS
+    global DATA, DEVICE, DEVICE_KIND, DEVICE_DETAILS, RENDER
     parser = argparse.ArgumentParser()
     device_group = parser.add_mutually_exclusive_group()
-    device_group.add_argument("--gpu", action="store_true", help="train on the GPU (default when CUDA is available)")
-    device_group.add_argument("--cpu", action="store_true", help="train on the CPU")
+    device_group.add_argument(
+        "--gpu", action="store_true", help="train on the GPU and render with WebGL (default when CUDA is available)"
+    )
+    device_group.add_argument(
+        "--cpu", action="store_true", help="train on the CPU and render with a software (CPU) canvas"
+    )
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8000)
     args = parser.parse_args()
@@ -129,9 +139,11 @@ def main():
     DEVICE = torch.device("cuda" if use_gpu else "cpu")
     DEVICE_KIND = "gpu" if use_gpu else "cpu"
     DEVICE_DETAILS = describe_device(DEVICE)
+    RENDER = "cpu" if args.cpu else "gpu"
 
     DATA = load_mnist(DEVICE)
     print(f"Training on {DEVICE_KIND.upper()}: {DEVICE_DETAILS}")
+    print("Rendering on " + ("CPU (software Canvas 2D in the browser)" if RENDER == "cpu" else "GPU (WebGL in the browser)"))
     print(f"Open http://{args.host}:{args.port}")
     uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
 

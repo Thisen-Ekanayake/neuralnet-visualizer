@@ -1,5 +1,8 @@
 import { NetworkScene } from './scene.js';
+import { CpuNetworkScene } from './scene_cpu.js';
 import { TrainingChart } from './chart.js';
+
+const CPU_RENDER = (await fetch('/api/config').then((r) => r.json())).render === 'cpu';
 
 const ACTIVATIONS = [
   ['relu', 'ReLU'], ['leaky_relu', 'Leaky ReLU'], ['gelu', 'GELU'],
@@ -23,6 +26,7 @@ const $ = (id) => document.getElementById(id);
 const fmt = (n) => n.toLocaleString('en-US');
 const pct = (x, digits = 1) => `${(x * 100).toFixed(digits)}%`;
 const num = (v, digits = 3) => (v == null ? '—' : v.toFixed(digits));
+const ctx2d = (canvas) => canvas.getContext('2d', { willReadFrequently: CPU_RENDER });
 
 const state = {
   hidden: [{ units: 50, activation: 'relu' }],
@@ -33,7 +37,8 @@ const state = {
   lastProgress: null,
   selected: null,
   training: false,
-  view: { edgeMode: 'weights', cutoff: 0, brightness: 1, maxEdges: 150000, showDead: true },
+  // CPU drawing costs ~1.7 ms per 1,000 lines, so draw fewer by default (still all of 784→50→10).
+  view: { edgeMode: 'weights', cutoff: 0, brightness: 1, maxEdges: CPU_RENDER ? 40000 : 150000, showDead: true },
 };
 
 const sizes = () => [784, ...state.hidden.map((l) => l.units), 10];
@@ -61,7 +66,8 @@ function activationSelect(value) {
 
 // ---------- 3D scene ----------
 
-const scene = new NetworkScene($('scene'), {
+const SceneClass = CPU_RENDER ? CpuNetworkScene : NetworkScene;
+const scene = new SceneClass($('scene'), {
   onHover: showTooltip,
   onSelect: (hit) => {
     const same = hit && state.selected && hit.layer === state.selected.layer && hit.index === state.selected.index;
@@ -70,7 +76,7 @@ const scene = new NetworkScene($('scene'), {
     refreshScene();
   },
 });
-const chart = new TrainingChart($('chart'));
+const chart = new TrainingChart($('chart'), { software: CPU_RENDER });
 
 let refreshPending = false;
 function refreshScene() {
@@ -304,7 +310,7 @@ $('sample-wrong').addEventListener('click', () => requestSample({ mode: 'misclas
 
 function renderForward() {
   const f = state.forward;
-  const ctx = $('digit').getContext('2d');
+  const ctx = ctx2d($('digit'));
   if (!f) {
     ctx.clearRect(0, 0, 28, 28);
     $('verdict').textContent = '';
@@ -429,7 +435,7 @@ function drawWeightImage(canvas, values) {
   canvas.className = 'pixels';
   canvas.width = 28;
   canvas.height = 28;
-  const ctx = canvas.getContext('2d');
+  const ctx = ctx2d(canvas);
   const image = ctx.createImageData(28, 28);
   const max = maxAbsOf(values);
   values.forEach((v, i) => {
@@ -446,7 +452,7 @@ function drawWeightBars(canvas, values) {
   const w = canvas.clientWidth, h = canvas.clientHeight;
   canvas.width = Math.round(w * dpr);
   canvas.height = Math.round(h * dpr);
-  const ctx = canvas.getContext('2d');
+  const ctx = ctx2d(canvas);
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   const max = maxAbsOf(values), mid = h / 2, step = w / values.length;
   ctx.fillStyle = '#222b3a';
@@ -586,11 +592,11 @@ function onMessage(msg) {
 
 // ---------- HUD ----------
 
-const gpuName = scene.gpuName.replace(/\s*\(0x[0-9a-f]+\)/i, '').slice(0, 90);
+const rendererName = scene.rendererName;
 function updateHud() {
   const neurons = sizes().reduce((a, b) => a + b, 0);
   $('hud').textContent = [
-    `Render  ${gpuName} · ${scene.fps} fps`,
+    `Render  ${rendererName} · ${scene.perfText}`,
     `Train   ${serverDeviceKind.toUpperCase()} · ${serverDevice} (PyTorch)`,
     `Scene   ${fmt(neurons)} neurons · ${fmt(scene.edgeDrawn)} of ${fmt(scene.edgeTotal)} connections drawn`,
   ].join('\n');
@@ -599,6 +605,9 @@ setInterval(updateHud, 500);
 
 // ---------- start ----------
 
+if (CPU_RENDER) $('max-edges').max = 150000;
+$('max-edges').value = state.view.maxEdges;
+$('max-edges-out').textContent = `${Math.round(state.view.maxEdges / 1000)}k`;
 renderLayerList();
 syncPreset();
 updateParams();
