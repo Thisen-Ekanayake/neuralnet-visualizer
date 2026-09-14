@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NeuralNet 3D</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/static/style.css">
+<script type="importmap">
+{ "imports": { "three": "/static/vendor/three.module.js", "three/addons/": "/static/vendor/" } }
+</script>
+</head>
+<body>
+<div id="layout">
+  <aside class="panel" id="left">
+    <header class="brand">
+      <h1>NeuralNet 3D</h1>
+      <span id="conn" class="pill">connecting…</span>
+    </header>
+
+    <section>
+      <h2>Architecture</h2>
+      <label class="field">Preset
+        <select id="preset">
+          <option value="">Custom</option>
+        </select>
+      </label>
+      <div class="field">Hidden layers
+        <div class="stepper">
+          <button id="layers-dec" aria-label="Remove last hidden layer">−</button>
+          <output id="layers-count">1</output>
+          <button id="layers-inc" aria-label="Add hidden layer">+</button>
+        </div>
+      </div>
+      <label class="field">Set all activations
+        <select id="act-all"><option value="">—</option></select>
+      </label>
+      <div id="layer-list"></div>
+    </section>
+
+    <section>
+      <h2>Parameters</h2>
+      <div class="big-number" id="param-total">0</div>
+      <div class="muted small" id="param-sub"></div>
+      <table id="param-table" class="table"></table>
+    </section>
+
+    <section>
+      <h2>Training <span class="muted">(MNIST, 60k images)</span></h2>
+      <div class="grid2">
+        <label>Epochs <input id="epochs" type="number" min="1" max="100" value="5"></label>
+        <label>Learning rate <input id="lr" type="number" min="0.00001" max="10" step="0.0005" value="0.001"></label>
+        <label>Batch size <input id="batch" type="number" min="1" max="4096" value="128"></label>
+        <label>Optimizer
+          <select id="optimizer"><option value="adam">Adam</option><option value="sgd">SGD + momentum</option></select>
+        </label>
+        <label class="span2">Speed
+          <select id="pace">
+            <option value="5">Watch it learn (≈5 s per epoch)</option>
+            <option value="20">Slow motion (≈20 s per epoch)</option>
+            <option value="0">Full GPU speed</option>
+          </select>
+        </label>
+      </div>
+      <div class="buttons">
+        <button id="train" class="btn primary">Train</button>
+        <button id="stop" class="btn" disabled>Stop</button>
+        <button id="reinit" class="btn" title="New random weights, same architecture">Reinitialize</button>
+      </div>
+      <div id="train-status" class="muted small"></div>
+    </section>
+  </aside>
+
+  <main id="stage">
+    <canvas id="scene"></canvas>
+    <div id="view-bar">
+      <button data-view="angled" class="btn small">3/4 view</button>
+      <button data-view="side" class="btn small">Side</button>
+      <button data-view="front" class="btn small">Front (input)</button>
+      <button data-view="top" class="btn small">Top</button>
+      <label class="btn small check"><input type="checkbox" id="auto-rotate"> Rotate</label>
+    </div>
+    <div id="legend">
+      <div><i class="swatch" style="background:#3d8bff"></i>positive weight</div>
+      <div><i class="swatch" style="background:#ff6a3d"></i>negative weight</div>
+      <div><i class="swatch round" style="background:#ffc861"></i>positive activation</div>
+      <div><i class="swatch round" style="background:#4cc9f0"></i>negative activation</div>
+      <div><i class="swatch round" style="background:#ff3b5c"></i>dead / saturated</div>
+    </div>
+    <div id="hud"></div>
+    <div id="hint" class="muted small">Drag to orbit · right-drag to pan · scroll to zoom · hover a neuron for details · click to select</div>
+  </main>
+
+  <aside class="panel" id="right">
+    <section>
+      <h2>Connections</h2>
+      <label class="field">Color by
+        <select id="edge-mode">
+          <option value="weights">Weight</option>
+          <option value="signal">Signal (weight × input)</option>
+          <option value="off">Hidden</option>
+        </select>
+      </label>
+      <label class="field col" title="Relative to the largest weight in each layer">
+        <span class="field-head">Hide weak weights <output id="cutoff-out">0%</output></span>
+        <input id="cutoff" type="range" min="0" max="95" value="0">
+      </label>
+      <label class="field col">
+        <span class="field-head">Brightness <output id="bright-out">1.0×</output></span>
+        <input id="brightness" type="range" min="0.1" max="6" step="0.1" value="1">
+      </label>
+      <label class="field col" title="Big networks are randomly subsampled above this many lines">
+        <span class="field-head">Max connections drawn <output id="max-edges-out">150k</output></span>
+        <input id="max-edges" type="range" min="10000" max="700000" step="10000" value="150000">
+      </label>
+      <label class="check"><input type="checkbox" id="show-dead" checked> Highlight dead / saturated neurons</label>
+    </section>
+
+    <section>
+      <h2>Forward pass <span class="muted">(test set)</span></h2>
+      <div class="digit-row">
+        <canvas id="digit" width="28" height="28"></canvas>
+        <div class="digit-controls">
+          <div class="field">Image #
+            <input id="sample-index" type="number" min="0" max="9999" value="0">
+          </div>
+          <div class="buttons tight">
+            <button id="sample-prev" class="btn small" aria-label="Previous image">◀</button>
+            <button id="sample-next" class="btn small" aria-label="Next image">▶</button>
+            <button id="sample-random" class="btn small">Random</button>
+          </div>
+          <button id="sample-wrong" class="btn small wide">Random misclassified</button>
+        </div>
+      </div>
+      <div id="verdict" class="verdict"></div>
+      <div id="probs"></div>
+    </section>
+
+    <section>
+      <h2>Training progress</h2>
+      <div id="metrics" class="metrics"></div>
+      <canvas id="chart"></canvas>
+    </section>
+
+    <section>
+      <h2>Dead neurons</h2>
+      <div id="dead-list"></div>
+      <p class="muted small">
+        Measured on all 10,000 test images. <b>ReLU/GELU dead</b>: never produces a positive output (GELU: stays below −3), so it gets no gradient and stops learning.
+        <b>Leaky ReLU stuck</b>: always on the negative side (only a 1% gradient).
+        <b>Tanh/Sigmoid saturated</b>: in the flat tail on ≥99% of images.
+      </p>
+    </section>
+
+    <section>
+      <h2>Selected neuron</h2>
+      <div id="sel-info" class="muted small">Click a neuron in the 3D view.</div>
+      <canvas id="sel-canvas" hidden></canvas>
+      <div id="sel-caption" class="muted small"></div>
+    </section>
+  </aside>
+</div>
+<div id="tooltip" hidden></div>
+<script type="module" src="/static/app.js"></script>
+</body>
+</html>
