@@ -1,8 +1,11 @@
 import { NetworkScene } from './scene.js';
 import { CpuNetworkScene } from './scene_cpu.js';
 import { TrainingChart } from './chart.js';
+import { el, ctx2d, setSoftwareCanvas, drawWeightImage, drawWeightBars } from './draw.js';
+import { FRAME_STEP, Walkthrough } from './walkthrough.js';
 
 const CPU_RENDER = (await fetch('/api/config').then((r) => r.json())).render === 'cpu';
+setSoftwareCanvas(CPU_RENDER);
 
 const ACTIVATIONS = [
   ['relu', 'ReLU'], ['leaky_relu', 'Leaky ReLU'], ['gelu', 'GELU'],
@@ -17,8 +20,19 @@ const PRESETS = [
   ['classic', '784 → 128 → 64 → 10', [[128, 'relu'], [64, 'relu']]],
   ['none', 'No hidden layer', []],
 ];
-const POSITIVE = [61, 139, 255];
-const NEGATIVE = [255, 106, 61];
+const FRAME_WEIGHTS = 0;
+const EDGE_LEGEND = {
+  weights: ['positive weight', 'negative weight'],
+  signal: ['positive signal (w · a)', 'negative signal (w · a)'],
+  backward: ['positive backward signal (w · δ)', 'negative backward signal (w · δ)'],
+  gradient: ['positive gradient ∂L/∂w', 'negative gradient ∂L/∂w'],
+  update: ['weight increased (Δw > 0)', 'weight decreased (Δw < 0)'],
+  off: ['positive weight', 'negative weight'],
+};
+const NODE_LEGEND = {
+  activation: ['positive activation', 'negative activation'],
+  delta: ['positive error δ = ∂L/∂z', 'negative error δ = ∂L/∂z'],
+};
 let MAX_LAYERS = 8;
 let MAX_UNITS = 256;
 
@@ -26,7 +40,6 @@ const $ = (id) => document.getElementById(id);
 const fmt = (n) => n.toLocaleString('en-US');
 const pct = (x, digits = 1) => `${(x * 100).toFixed(digits)}%`;
 const num = (v, digits = 3) => (v == null ? '—' : v.toFixed(digits));
-const ctx2d = (canvas) => canvas.getContext('2d', { willReadFrequently: CPU_RENDER });
 
 const state = {
   hidden: [{ units: 50, activation: 'relu' }],
@@ -45,13 +58,6 @@ const sizes = () => [784, ...state.hidden.map((l) => l.units), 10];
 const isOutput = (li) => li === sizes().length - 1;
 const layerName = (li) => (li === 0 ? 'Input' : isOutput(li) ? 'Output' : `Hidden ${li}`);
 const shortName = (li) => (li === 0 ? 'In' : isOutput(li) ? 'Out' : `H${li}`);
-
-function el(tag, className, text) {
-  const node = document.createElement(tag);
-  if (className) node.className = className;
-  if (text != null) node.textContent = text;
-  return node;
-}
 
 function clampInt(value, lo, hi) {
   const n = parseInt(value, 10);
@@ -72,11 +78,72 @@ const scene = new SceneClass($('scene'), {
   onSelect: (hit) => {
     const same = hit && state.selected && hit.layer === state.selected.layer && hit.index === state.selected.index;
     state.selected = same ? null : hit;
+    walk.selectNeuron(state.selected);
     renderSelected();
     refreshScene();
   },
 });
 const chart = new TrainingChart($('chart'), { software: CPU_RENDER });
+
+// ---------- training-step walkthrough (right panel tab) ----------
+
+let activeTab = 'inspect';
+const walk = new Walkthrough({
+  // Like Train, a step or preview must not overtake a pending (debounced) rebuild.
+  send: (message) => { if (buildTimer !== null) flushBuild(); send(message); },
+  getConfig: () => ({ lr: Number($('lr').value), optimizer: $('optimizer').value }),
+  onChange: () => { syncEdgeModes(); refreshScene(); },
+  onSelect: (hit) => { state.selected = hit; renderSelected(); refreshScene(); },
+});
+
+function setTab(tab) {
+  activeTab = tab;
+  for (const button of document.querySelectorAll('#right-tabs [data-tab]')) {
+    button.setAttribute('aria-selected', String(button.dataset.tab === tab));
+  }
+  $('pane-inspect').hidden = tab !== 'inspect';
+  $('pane-step').hidden = tab !== 'step';
+  $('layout').classList.toggle('step-open', tab === 'step');
+  walk.setActive(tab === 'step');
+  if (tab === 'inspect') renderSelected();
+  refreshScene();
+}
+for (const button of document.querySelectorAll('#right-tabs [data-tab]')) {
+  button.addEventListener('click', () => setTab(button.dataset.tab));
+}
+document.addEventListener('keydown', (e) => { if (activeTab === 'step') walk.handleKey(e); });
+
+/** The walkthrough's view of the 3D scene while its tab is open (and following is on), else null. */
+const walkScene = () => (activeTab === 'step' ? walk.sceneData() : null);
+const currentForward = () => walkScene()?.forward ?? state.forward;
+
+// The Inspect tab's gradient/update colorings need a step that still matches the weights.
+function syncEdgeModes() {
+  const select = $('edge-mode'), live = walk.hasLiveStep();
+  for (const value of ['gradient', 'update']) select.querySelector(`option[value="${value}"]`).disabled = !live;
+  if (!live && (state.view.edgeMode === 'gradient' || state.view.edgeMode === 'update')) {
+    select.value = 'weights';
+    state.view = { ...state.view, edgeMode: 'weights' };
+  }
+}
+
+let mergedView = { base: null, patch: null, view: null };
+function effectiveView(patch) {
+  if (!patch) return state.view;
+  if (mergedView.base !== state.view || mergedView.patch !== patch) {
+    mergedView = { base: state.view, patch, view: { ...state.view, ...patch } };
+  }
+  return mergedView.view;
+}
+
+function updateLegend(view) {
+  const edges = EDGE_LEGEND[view.edgeMode] ?? EDGE_LEGEND.weights;
+  const nodes = NODE_LEGEND[view.neuronMode ?? 'activation'];
+  $('legend-edge-pos').textContent = edges[0];
+  $('legend-edge-neg').textContent = edges[1];
+  $('legend-node-pos').textContent = nodes[0];
+  $('legend-node-neg').textContent = nodes[1];
+}
 
 let refreshPending = false;
 function refreshScene() {
@@ -84,8 +151,15 @@ function refreshScene() {
   refreshPending = true;
   requestAnimationFrame(() => {
     refreshPending = false;
-    const { weights, forward, stats, selected, view } = state;
-    scene.update({ weights, forward, stats, selected, view });
+    const { weights, forward, stats, selected } = state;
+    const w = walkScene();
+    const view = effectiveView(w?.view);
+    if (w) {
+      scene.update({ weights: w.weights, forward: w.forward, stats, selected, view, step: w.step, highlight: w.highlight });
+    } else {
+      scene.update({ weights, forward, stats, selected, view, step: walk.stepData(), highlight: null });
+    }
+    updateLegend(view);
   });
 }
 
@@ -190,6 +264,7 @@ function architectureChanged({ rerenderList = false } = {}) {
   renderDead();
   renderForward();
   renderSelected();
+  walk.setArchitecture(sizes(), state.hidden);
   rebuildScene();
   scheduleBuild();
 }
@@ -236,6 +311,7 @@ $('layers-inc').addEventListener('click', () => {
 
 $('train').addEventListener('click', () => {
   if (buildTimer !== null) flushBuild();
+  walk.trainingRequested();
   send({
     type: 'train',
     epochs: Number($('epochs').value),
@@ -247,11 +323,14 @@ $('train').addEventListener('click', () => {
 });
 $('stop').addEventListener('click', () => send({ type: 'stop' }));
 $('reinit').addEventListener('click', () => architectureChanged());
+$('lr').addEventListener('input', () => walk.configChanged());
+$('optimizer').addEventListener('change', () => walk.configChanged());
 
 function updateTrainButtons() {
   $('train').disabled = state.training || !connected;
   $('stop').disabled = !state.training;
-  $('train').textContent = (state.stats?.epoch ?? 0) > 0 ? 'Train more' : 'Train';
+  const trained = (state.stats?.epoch ?? 0) > 0;
+  $('train').textContent = trained ? 'Train more' : 'Train';
 }
 
 let errorTimer = null;
@@ -268,12 +347,19 @@ function renderTrainStatus() {
   const status = $('train-status');
   status.classList.remove('error');
   const epoch = state.stats?.epoch ?? 0;
+  const singleSteps = state.stats?.singleSteps ?? 0;
   const p = state.lastProgress;
   if (state.training) {
     const where = `Training on the ${serverDeviceKind.toUpperCase()}…`;
     status.textContent = p ? `${where} epoch ${p.epoch.toFixed(2)}` : where;
   } else if (epoch > 0) {
-    status.textContent = `Trained for ${epoch.toFixed(2)} epochs. "Train more" continues from these weights.`;
+    // Each single step adds one image's worth (1/60,000) of an epoch.
+    const epochs = Math.max(0, epoch - singleSteps / walk.trainSize);
+    const steps = `${fmt(singleSteps)} single step${singleSteps === 1 ? '' : 's'}`;
+    const what = epochs >= 0.005
+      ? `Trained for ${epochs.toFixed(2)} epochs${singleSteps ? ` and ${steps}` : ''}`
+      : `Took ${steps} from the random initial weights`;
+    status.textContent = `${what}. "Train more" continues from these weights and the optimizer's state.`;
   } else {
     status.textContent = 'Untrained: random initial weights.';
   }
@@ -353,7 +439,7 @@ function renderDead() {
 // ---------- neuron details (tooltip + selection panel) ----------
 
 function describeNeuron(layer, index) {
-  const s = sizes(), f = state.forward, w = state.weights;
+  const s = sizes(), f = currentForward(), w = state.weights;
   const rows = [];
   if (layer === 0) {
     rows.push(['Pixel value', f ? num(f.input[index], 2) : '—']);
@@ -407,61 +493,25 @@ function renderSelected() {
   info.innerHTML = `<b>${title}</b><div class="kv">${rows.map(([k, v]) => `<span>${k}</span><span>${v}</span>`).join('')}</div>`;
 
   const weights = state.weights;
-  if (!weights) return;
+  if (!weights || activeTab !== 'inspect') return;
+  canvas.hidden = false;
   if (sel.layer === 1) {
     const w = weights[0];
+    canvas.className = 'pixels';
     drawWeightImage(canvas, w.W.subarray(sel.index * w.inN, (sel.index + 1) * w.inN));
     caption.textContent = 'Incoming weights drawn as a 28×28 image: blue pixels push this neuron up, orange pixels push it down. It is the pattern this neuron responds to.';
   } else if (sel.layer > 1) {
     const w = weights[sel.layer - 1];
+    canvas.className = 'bars';
     drawWeightBars(canvas, w.W.subarray(sel.index * w.inN, (sel.index + 1) * w.inN));
     caption.textContent = `Incoming weights from the ${fmt(w.inN)} neurons of ${layerName(sel.layer - 1)} (blue positive, orange negative).`;
   } else {
     const w = weights[0];
     const outgoing = Float32Array.from({ length: w.outN }, (_, o) => w.W[o * w.inN + sel.index]);
+    canvas.className = 'bars';
     drawWeightBars(canvas, outgoing);
     caption.textContent = `Outgoing weights to the ${fmt(w.outN)} neurons of ${layerName(1)}.`;
   }
-}
-
-function maxAbsOf(values) {
-  let m = 0;
-  for (const v of values) m = Math.max(m, Math.abs(v));
-  return m || 1;
-}
-
-function drawWeightImage(canvas, values) {
-  canvas.hidden = false;
-  canvas.className = 'pixels';
-  canvas.width = 28;
-  canvas.height = 28;
-  const ctx = ctx2d(canvas);
-  const image = ctx.createImageData(28, 28);
-  const max = maxAbsOf(values);
-  values.forEach((v, i) => {
-    const t = Math.abs(v) / max, c = v >= 0 ? POSITIVE : NEGATIVE;
-    image.data.set([c[0] * t, c[1] * t, c[2] * t, 255], i * 4);
-  });
-  ctx.putImageData(image, 0, 0);
-}
-
-function drawWeightBars(canvas, values) {
-  canvas.hidden = false;
-  canvas.className = 'bars';
-  const dpr = window.devicePixelRatio || 1;
-  const w = canvas.clientWidth, h = canvas.clientHeight;
-  canvas.width = Math.round(w * dpr);
-  canvas.height = Math.round(h * dpr);
-  const ctx = ctx2d(canvas);
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  const max = maxAbsOf(values), mid = h / 2, step = w / values.length;
-  ctx.fillStyle = '#222b3a';
-  ctx.fillRect(0, mid, w, 1);
-  values.forEach((v, i) => {
-    const barH = (Math.abs(v) / max) * (mid - 4);
-    ctx.fillStyle = v >= 0 ? `rgb(${POSITIVE})` : `rgb(${NEGATIVE})`;
-    ctx.fillRect(i * step, v >= 0 ? mid - barH : mid + 1, Math.max(1, step - 1), barH);
-  });
 }
 
 // ---------- view controls ----------
@@ -518,26 +568,35 @@ function connect() {
   ws.onopen = () => {
     setConnected(true);
     flushBuild();
+    walk.setConnected(true); // after the build, so its requests reach a built network
   };
   ws.onclose = () => {
     setConnected(false);
+    walk.setConnected(false);
     state.training = false;
     renderTrainStatus();
     setTimeout(connect, 1500);
   };
   ws.onmessage = (event) => {
-    if (event.data instanceof ArrayBuffer) onWeights(event.data);
+    if (event.data instanceof ArrayBuffer) onBinary(event.data);
     else onMessage(JSON.parse(event.data));
   };
 }
 
+function onBinary(buffer) {
+  const kind = new Uint32Array(buffer, 0, 1)[0];
+  if (kind === FRAME_WEIGHTS) onWeights(buffer);
+  else if (kind === FRAME_STEP) walk.onStepFrame(buffer, state.buildId);
+}
+
+/** Weights frame: uint32 [FRAME_WEIGHTS, buildId, layerCount, (in, out) per layer], then float32 W, b per layer. */
 function onWeights(buffer) {
-  const [buildId, count] = new Uint32Array(buffer, 0, 2);
+  const [buildId, count] = new Uint32Array(buffer, 4, 2);
   if (buildId !== state.buildId) return;
-  const dims = new Uint32Array(buffer, 8, count * 2);
+  const dims = new Uint32Array(buffer, 12, count * 2);
   const s = sizes();
   if (count !== s.length - 1) return;
-  let offset = 8 + count * 8;
+  let offset = 12 + count * 8;
   const layers = [];
   for (let l = 0; l < count; l++) {
     const inN = dims[l * 2], outN = dims[l * 2 + 1];
@@ -559,10 +618,11 @@ function onMessage(msg) {
     serverDeviceKind = msg.deviceKind;
     MAX_LAYERS = msg.maxLayers;
     MAX_UNITS = msg.maxUnits;
+    walk.setTrainSize(msg.trainSize);
     updateHud();
     return;
   }
-  if (msg.type === 'error') { showError(msg.message); return; }
+  if (msg.type === 'error') { showError(msg.message); walk.onError(); return; }
   if (msg.buildId !== state.buildId) return;
 
   if (msg.type === 'progress') {
@@ -576,6 +636,7 @@ function onMessage(msg) {
     renderMetrics();
     renderDead();
     renderTrainStatus();
+    walk.setStats(msg);
     refreshScene();
     if (state.selected) renderSelected();
   } else if (msg.type === 'forward') {
@@ -586,7 +647,14 @@ function onMessage(msg) {
     if (state.selected) renderSelected();
   } else if (msg.type === 'status') {
     state.training = msg.training;
+    walk.setTraining(msg.training);
     renderTrainStatus();
+  } else if (msg.type === 'trainImage') {
+    walk.onTrainImage(msg);
+  } else if (msg.type === 'undone') {
+    walk.onUndone(msg);
+  } else if (msg.type === 'gradcheck') {
+    walk.onGradcheck(msg);
   }
 }
 
@@ -614,5 +682,6 @@ updateParams();
 renderMetrics();
 renderTrainStatus();
 renderDead();
+walk.setArchitecture(sizes(), state.hidden);
 rebuildScene();
 connect();

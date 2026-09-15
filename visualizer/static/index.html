@@ -5,7 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>NeuralNet 3D</title>
 <link rel="icon" href="data:,">
+<link rel="stylesheet" href="/static/vendor/katex/katex.min.css">
 <link rel="stylesheet" href="/static/style.css">
+<script src="/static/vendor/katex/katex.min.js" defer></script>
 <script type="importmap">
 { "imports": { "three": "/static/vendor/three.module.js", "three/addons/": "/static/vendor/" } }
 </script>
@@ -52,7 +54,7 @@
         <label>Learning rate <input id="lr" type="number" min="0.00001" max="10" step="0.0005" value="0.001"></label>
         <label>Batch size <input id="batch" type="number" min="1" max="4096" value="128"></label>
         <label>Optimizer
-          <select id="optimizer"><option value="adam">Adam</option><option value="sgd">SGD + momentum</option></select>
+          <select id="optimizer"><option value="adam">Adam</option><option value="sgd">SGD + momentum</option><option value="sgd_plain">SGD (plain)</option></select>
         </label>
         <label class="span2">Speed
           <select id="pace">
@@ -81,10 +83,10 @@
       <label class="btn small check"><input type="checkbox" id="auto-rotate"> Rotate</label>
     </div>
     <div id="legend">
-      <div><i class="swatch" style="background:#3d8bff"></i>positive weight</div>
-      <div><i class="swatch" style="background:#ff6a3d"></i>negative weight</div>
-      <div><i class="swatch round" style="background:#ffc861"></i>positive activation</div>
-      <div><i class="swatch round" style="background:#4cc9f0"></i>negative activation</div>
+      <div><i class="swatch" style="background:#3d8bff"></i><span id="legend-edge-pos">positive weight</span></div>
+      <div><i class="swatch" style="background:#ff6a3d"></i><span id="legend-edge-neg">negative weight</span></div>
+      <div><i class="swatch round" style="background:#ffc861"></i><span id="legend-node-pos">positive activation</span></div>
+      <div><i class="swatch round" style="background:#4cc9f0"></i><span id="legend-node-neg">negative activation</span></div>
       <div><i class="swatch round" style="background:#ff3b5c"></i>dead / saturated</div>
     </div>
     <div id="hud"></div>
@@ -92,12 +94,20 @@
   </main>
 
   <aside class="panel" id="right">
+    <nav class="tabs" id="right-tabs" role="tablist">
+      <button role="tab" id="tab-inspect" data-tab="inspect" aria-selected="true" aria-controls="pane-inspect">Inspect</button>
+      <button role="tab" id="tab-step" data-tab="step" aria-selected="false" aria-controls="pane-step">Training step</button>
+    </nav>
+
+    <div id="pane-inspect" role="tabpanel" aria-labelledby="tab-inspect">
     <section>
       <h2>Connections</h2>
       <label class="field">Color by
         <select id="edge-mode">
           <option value="weights">Weight</option>
           <option value="signal">Signal (weight × input)</option>
+          <option value="gradient" disabled>Gradient ∂L/∂w (last step)</option>
+          <option value="update" disabled>Update Δw (last step)</option>
           <option value="off">Hidden</option>
         </select>
       </label>
@@ -158,6 +168,43 @@
       <canvas id="sel-canvas" hidden></canvas>
       <div id="sel-caption" class="muted small"></div>
     </section>
+    </div>
+
+    <div id="pane-step" role="tabpanel" aria-labelledby="tab-step" hidden>
+      <section>
+        <h2>One training step <span class="muted">(batch of 1 training image)</span></h2>
+        <div class="digit-row">
+          <canvas id="walk-digit" width="28" height="28"></canvas>
+          <div class="digit-controls">
+            <div class="field">Image #
+              <input id="walk-index" type="number" min="0" max="59999" value="0">
+            </div>
+            <div class="buttons tight">
+              <button id="walk-prev" class="btn small" aria-label="Previous training image">◀</button>
+              <button id="walk-next" class="btn small" aria-label="Next training image">▶</button>
+              <button id="walk-random" class="btn small">Random</button>
+            </div>
+            <button id="walk-wrong" class="btn small wide">Random misclassified</button>
+          </div>
+        </div>
+        <div id="walk-image-info" class="verdict"></div>
+        <div class="buttons">
+          <button id="walk-step" class="btn primary">Take one step</button>
+          <button id="walk-undo" class="btn" disabled>Undo step</button>
+        </div>
+        <div id="walk-config" class="muted small"></div>
+        <label class="check small walk-follow"><input type="checkbox" id="walk-follow" checked> 3D view follows the walkthrough</label>
+      </section>
+      <section>
+        <div id="walk-chips" class="chips"></div>
+        <div class="walk-nav">
+          <button id="walk-back" class="btn small">◀ Prev</button>
+          <span id="walk-pos" class="muted small"></span>
+          <button id="walk-fwd" class="btn small">Next ▶</button>
+        </div>
+        <div id="walk-stage"></div>
+      </section>
+    </div>
   </aside>
 </div>
 <div id="tooltip" hidden></div>

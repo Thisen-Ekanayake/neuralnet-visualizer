@@ -1,6 +1,6 @@
 # NeuralNet
 
-Small experiments on how a fully connected neural network's **width** (neurons per hidden layer) and **depth** (number of hidden layers) affect MNIST accuracy, plus an interactive **3D visualizer** that trains networks on the GPU or CPU and shows their weights, activations, and dead neurons live.
+Small experiments on how a fully connected neural network's **width** (neurons per hidden layer) and **depth** (number of hidden layers) affect MNIST accuracy, plus an interactive **3D visualizer** that trains networks on the GPU or CPU, shows their weights, activations, and dead neurons live, and walks through a single training step (forward pass, loss, backpropagation, chain rule, gradient descent, and the optimizer) as formulas and as the network's actual numbers.
 
 ## Contents
 
@@ -11,10 +11,11 @@ scripts/
   depth_experiment.py        Depth study: 1–5 hidden layers of a fixed width
 visualizer/
   server.py                  FastAPI server: trains models with PyTorch, streams state over a WebSocket
-  trainer.py                 Model definition, training thread, dead-neuron detection
+  trainer.py                 Model definition, training thread, single traced steps, dead-neuron detection
   mnist_data.py              IDX-format MNIST loader
-  static/                    The page: scene.js draws with WebGL, scene_cpu.js with a CPU canvas
-                             (three.js is vendored in static/vendor, so no internet is needed)
+  static/                    The page: scene.js draws with WebGL, scene_cpu.js with a CPU canvas,
+                             walkthrough.js is the Training step tab
+                             (three.js and KaTeX are vendored in static/vendor, so no internet is needed)
 *.png                        Plots and a sample digit produced by the scripts
 ```
 
@@ -123,7 +124,7 @@ Leave the server running while you use the page. It loads MNIST onto the chosen 
 **Left panel: build and train**
 - Pick a preset (including the networks from the experiments above), or set the number of hidden layers (0–8), the neurons in each layer (1–256), and each layer's activation: ReLU, Leaky ReLU, GELU, Tanh, Sigmoid, or Linear.
 - The parameter count updates immediately, with a per-layer weights/biases table.
-- **Train** runs on the server's device. **Speed** defaults to about 5 seconds per epoch so you can watch the network learn; *Full speed* trains as fast as the device allows. **Train more** continues from the current weights, **Reinitialize** starts over with new random weights, and any architecture change also starts fresh.
+- **Train** runs on the server's device with Adam, SGD with momentum 0.9, or plain SGD. **Speed** defaults to about 5 seconds per epoch so you can watch the network learn; *Full speed* trains as fast as the device allows. **Train more** continues from the current weights and the optimizer's state (Adam's running averages, the momentum buffer), as do single steps from the Training step tab; switching optimizers starts a fresh one. **Reinitialize** starts over with new random weights, and any architecture change also starts fresh.
 
 **Center: the 3D network**
 - Drag to orbit, right-drag to pan, scroll to zoom. The buttons at the top jump to preset camera angles or turn on auto-rotation.
@@ -132,12 +133,29 @@ Leave the server running while you use the page. It loads MNIST onto the chosen 
 - Hover a neuron for its activation, bias, and firing rate. Click it to highlight its connections and show its details on the right.
 - The bottom-left panel shows what renders the view (the browser's GPU and frame rate, or the CPU and milliseconds per frame), which device the server trains on (GPU name and memory, or CPU model and thread count), and how many connections are drawn.
 
-**Right panel: inspect**
-- **Connections:** color by weight, or by *signal* (weight × input for the current digit) to see which paths the digit actually uses. You can hide weak weights, adjust brightness, and cap how many lines are drawn (large networks are randomly subsampled above the cap, 150k by default, up to 700k).
+**Right panel, Inspect tab**
+- **Connections:** color by weight, or by *signal* (weight × input for the current digit) to see which paths the digit actually uses, or, after a single step, by each weight's gradient or by how much the step changed it. You can hide weak weights, adjust brightness, and cap how many lines are drawn (large networks are randomly subsampled above the cap, 150k by default, up to 700k).
 - **Forward pass:** step through test images, jump to a random misclassified one, and see all 10 output probabilities.
 - **Training progress:** test accuracy, train loss, and a live chart.
 - **Dead neurons:** per-layer counts, measured on all 10,000 test images. ReLU/GELU neurons are *dead* if they never produce a positive output (so they get no gradient), Leaky ReLU neurons are *stuck* if always negative, and Tanh/Sigmoid neurons are *saturated* if they sit in the flat tail on at least 99% of images. Dead neurons are drawn in red.
 - **Selected neuron:** for a first-hidden-layer neuron, its 784 incoming weights are drawn as a 28×28 image, which shows the pattern it responds to. Deeper and output neurons show their incoming weights as a bar chart, and input pixels show their outgoing weights.
+
+**Right panel, Training step tab**
+
+Walks through one real training step, one stage at a time. Each stage shows the formula, rendered with KaTeX, then the same formula with this network's numbers filled in.
+- Pick a training image (by index, random, or one the network currently gets wrong) and press **Take one step**. The server runs one optimizer step on that single image (a batch of 1), with the learning rate and optimizer from the Training panel, and records every intermediate value. Training must be stopped first.
+- Go through the stages with **◀ Prev / Next ▶**, the stage buttons, or the arrow keys:
+  - **Forward pass**, one layer at a time: the weighted sum and activation of one neuron, with its largest terms written out.
+  - **Softmax** and the cross-entropy **loss**.
+  - **Backpropagation**: the output error δ = p − y, then δ for each hidden layer, including the activation's slope σ′. Neurons with σ′ = 0 stop the error.
+  - **Chain rule** for one traced weight: ∂L/∂w = δᵢ·aⱼ, the strongest single path from the weight to the loss, and a map of the gradient of every weight in its layer. In the first layer each neuron's tile is the digit itself, scaled by that neuron's δ.
+  - **Gradient descent**: w ← w − η·∂L/∂w.
+  - **Optimizer**: what Adam or momentum actually did to the traced weight, using its real stored state.
+  - **Result**: the loss before and after, the first-order estimate from the gradient, and the loss for a range of learning rates on this image and on 1,000 test images.
+- The traced weight starts as the one with the largest gradient. Pick another with the controls, by clicking a tile of the gradient map, or by clicking a neuron in the 3D view.
+- **Check with finite differences** nudges the traced weight by ±ε on the server and compares the change in the loss with the backprop gradient.
+- **Undo step** restores the weights and the optimizer state, so you can retry the same image with a different learning rate.
+- While the tab is open, the 3D view shows the step's training image and follows the stage it is on. Layers the pass hasn't reached yet stay grey, neurons are colored by their error δ during backprop, connections show the gradient or the update, and the traced weight is drawn in white. Untick *3D view follows the walkthrough* to keep the Inspect view.
 
 ## Troubleshooting
 

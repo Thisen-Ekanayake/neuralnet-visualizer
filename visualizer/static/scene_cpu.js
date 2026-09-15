@@ -64,6 +64,7 @@ export class CpuNetworkScene extends NetworkScene {
       this.viewProjection.multiplyMatrices(this.camera.projectionMatrix, this.camera.matrixWorldInverse);
       this.projectNeurons();
       this.drawEdges();
+      this.drawHighlight();
       this.drawNeurons();
       this.drawLabels();
     }
@@ -120,6 +121,24 @@ export class CpuNetworkScene extends NetworkScene {
       }
     }
     ctx.globalAlpha = 1;
+  }
+
+  /** The walkthrough's followed weight, on top of the other connections. */
+  drawHighlight() {
+    const h = this.data?.highlight;
+    const from = this.screen[h?.link], to = this.screen[h?.link + 1];
+    if (!from || !to) return;
+    const a = h.from * 3, b = h.to * 3;
+    if (from[a + 2] < 0 || to[b + 2] < 0) return;
+    const { ctx } = this;
+    ctx.globalAlpha = 1;
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(from[a], from[a + 1]);
+    ctx.lineTo(to[b], to[b + 1]);
+    ctx.stroke();
+    ctx.lineWidth = 1;
   }
 
   drawNeurons() {

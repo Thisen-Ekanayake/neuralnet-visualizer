@@ -74,6 +74,14 @@ async def handle(session, msg):
         await asyncio.to_thread(session.stop_training)
     elif kind == "sample":
         await asyncio.to_thread(session.set_sample, msg.get("index"), msg.get("mode"))
+    elif kind == "trainImage":
+        await asyncio.to_thread(session.train_image, msg.get("index"), msg.get("mode"))
+    elif kind == "step":
+        await asyncio.to_thread(session.single_step, msg.get("index"), msg.get("mode"), msg["lr"], msg["optimizer"])
+    elif kind == "undo":
+        await asyncio.to_thread(session.undo_step)
+    elif kind == "gradcheck":
+        await asyncio.to_thread(session.gradcheck, msg["stepId"], msg["layer"], msg["row"], msg["col"])
     else:
         raise ValueError(f"unknown message type {kind!r}")
 
@@ -104,6 +112,7 @@ async def websocket_endpoint(ws: WebSocket):
         "maxLayers": MAX_HIDDEN_LAYERS,
         "maxUnits": MAX_UNITS,
         "activations": list(ACTIVATIONS),
+        "trainSize": len(DATA[0][1]),
     })
     try:
         while True:

@@ -120,6 +120,9 @@ export class NetworkScene {
     this.root = new THREE.Group();
     this.scene.add(this.root);
     this.edgeMaterial = new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, depthWrite: false });
+    // The walkthrough's followed weight: one white line drawn over everything, even if its edge isn't sampled.
+    this.highlightMaterial = new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, depthTest: false, depthWrite: false });
+    this.highlightLine = null;
 
     this.layers = [];
     this.links = [];
@@ -195,7 +198,7 @@ export class NetworkScene {
   clear() {
     this.root.traverse((obj) => {
       if (obj.geometry) obj.geometry.dispose();
-      if (obj.material && obj.material !== this.edgeMaterial) {
+      if (obj.material && obj.material !== this.edgeMaterial && obj.material !== this.highlightMaterial) {
         obj.material.map?.dispose();
         obj.material.dispose();
       }
@@ -203,6 +206,7 @@ export class NetworkScene {
     this.root.clear();
     this.layers = [];
     this.links = [];
+    this.highlightLine = null;
   }
 
   build(sizes, activationLabels, maxEdges) {
@@ -317,14 +321,36 @@ export class NetworkScene {
   setAutoRotate(on) { this.controls.autoRotate = on; }
 
   update(data) {
-    const edgesChanged = !this.data
-      || data.weights !== this.data.weights
-      || data.selected !== this.data.selected
-      || data.view !== this.data.view
-      || (data.view.edgeMode === 'signal' && data.forward !== this.data.forward);
+    const prev = this.data;
+    const edgesChanged = !prev
+      || data.weights !== prev.weights
+      || data.selected !== prev.selected
+      || data.view !== prev.view
+      || data.step !== prev.step
+      || (data.view.edgeMode === 'signal' && data.forward !== prev.forward);
+    const highlightChanged = !prev || data.highlight !== prev.highlight;
     this.data = data;
+    if (highlightChanged) this.updateHighlight();
     this.refreshNeurons();
     if (edgesChanged) this.colorEdges();
+  }
+
+  updateHighlight() {
+    if (this.highlightLine) {
+      this.root.remove(this.highlightLine);
+      this.highlightLine.geometry.dispose();
+      this.highlightLine = null;
+    }
+    const h = this.data?.highlight;
+    const from = this.layers[h?.link]?.positions, to = this.layers[h?.link + 1]?.positions;
+    if (!from || !to) return;
+    const ends = [...from.subarray(h.from * 3, h.from * 3 + 3), ...to.subarray(h.to * 3, h.to * 3 + 3)];
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(ends, 3));
+    this.highlightLine = new THREE.LineSegments(geometry, this.highlightMaterial);
+    this.highlightLine.renderOrder = 5;
+    this.root.add(this.highlightLine);
+    this.invalidate();
   }
 
   refresh() {
@@ -334,33 +360,42 @@ export class NetworkScene {
 
   refreshNeurons() {
     const data = this.data;
-    const forward = data?.forward, stats = data?.stats, selected = data?.selected;
-    const showDead = data?.view.showDead;
+    const forward = data?.forward, stats = data?.stats, selected = data?.selected, view = data?.view;
+    const step = data?.step, highlight = data?.highlight;
+    const showDead = view?.showDead;
+    const deltaMode = view?.neuronMode === 'delta' && step;
+    const last = this.layers.length - 1;
     const color = this.tmpColor;
 
     this.layers.forEach((layer, li) => {
       const { mesh, n, positions, kind } = layer;
-      const acts = kind === 'hidden' ? forward?.activations[li - 1] : null;
+      // Walkthrough: layers the forward (or backward) pass hasn't reached yet stay idle.
+      const idle = li > 0 && ((view?.phase === 'forward' && li > view.activeLayer)
+        || (view?.phase === 'backward' && li < view.activeLayer));
+      let values = null;
+      if (!idle && deltaMode && li > 0) values = li === last ? step.deltaOut : step.deltas[li - 1];
+      else if (!idle && kind === 'hidden') values = forward?.activations[li - 1];
       let maxAbs = 0;
-      if (acts) for (const a of acts) maxAbs = Math.max(maxAbs, Math.abs(a));
+      if (values) for (const v of values) maxAbs = Math.max(maxAbs, Math.abs(v));
       const dead = kind === 'hidden' && showDead && stats ? new Set(stats.layers[li - 1]?.dead) : null;
 
       for (let i = 0; i < n; i++) {
         let scale = 1;
         if (kind === 'input') {
           color.lerpColors(COLORS.pixelOff, COLORS.pixelOn, forward ? forward.input[i] : 0);
-        } else if (kind === 'output') {
+        } else if (kind === 'output' && !deltaMode && !idle) {
           const p = forward ? forward.probs[i] : 0;
           color.lerpColors(COLORS.idle, COLORS.positive, Math.sqrt(p));
           scale = 1 + 0.6 * p;
-        } else if (acts && maxAbs > 0) {
-          const a = acts[i];
-          color.lerpColors(COLORS.idle, a >= 0 ? COLORS.positive : COLORS.negative, Math.abs(a) / maxAbs);
+        } else if (values && maxAbs > 0) {
+          const v = values[i];
+          color.lerpColors(COLORS.idle, v >= 0 ? COLORS.positive : COLORS.negative, Math.abs(v) / maxAbs);
         } else {
           color.copy(COLORS.idle);
         }
         if (dead?.has(i)) color.copy(COLORS.dead);
-        if (selected && selected.layer === li && selected.index === i) { color.copy(COLORS.selected); scale *= 1.5; }
+        const endpoint = highlight && ((li === highlight.link && i === highlight.from) || (li === highlight.link + 1 && i === highlight.to));
+        if (endpoint || (selected && selected.layer === li && selected.index === i)) { color.copy(COLORS.selected); scale *= 1.5; }
         if (this.hovered && this.hovered.layer === li && this.hovered.index === i) scale *= 1.35;
 
         this.tmpPos.fromArray(positions, i * 3);
@@ -377,21 +412,28 @@ export class NetworkScene {
   colorEdges() {
     const data = this.data;
     const view = data?.view ?? { edgeMode: 'weights', cutoff: 0, brightness: 1 };
-    const weights = data?.weights, forward = data?.forward, selected = data?.selected;
+    const weights = data?.weights, forward = data?.forward, selected = data?.selected, step = data?.step;
+    const mode = view.edgeMode, last = this.layers.length - 1;
 
     for (const link of this.links) {
       const { lines, colors, idx, values, inN, l } = link;
-      lines.visible = view.edgeMode !== 'off';
+      lines.visible = mode !== 'off';
       if (!lines.visible) continue;
 
-      const W = weights?.[l]?.W;
-      const source = forward ? (l === 0 ? forward.input : forward.activations[l - 1]) : null;
-      const signal = view.edgeMode === 'signal' && source;
+      // Each line shows its weight, weight × input (signal), weight × the error it carries back
+      // (backward), its gradient, or how much the last single step changed it (update).
+      let base = weights?.[l]?.W, byInput = null, byOutput = null;
+      if (mode === 'gradient') base = step?.grads[l];
+      else if (mode === 'update') base = step?.updates[l];
+      else if (mode === 'signal') byInput = forward ? (l === 0 ? forward.input : forward.activations[l - 1]) : null;
+      else if (mode === 'backward') byOutput = step ? (l + 1 === last ? step.deltaOut : step.deltas[l]) : null;
       const incoming = selected && selected.layer === l + 1;
       const outgoing = selected && selected.layer === l;
-      const gain = view.brightness * link.density;
+      // The walkthrough dims every layer but the one it is talking about.
+      const dim = view.focusLink != null && view.focusLink !== l ? 0.15 : 1;
+      const gain = view.brightness * link.density * dim;
 
-      if (!W) {
+      if (!base) {
         const alpha = Math.min(1, 0.4 * gain);
         for (let k = 0; k < colors.length; k += 4) {
           colors[k] = COLORS.edgeIdle.r; colors[k + 1] = COLORS.edgeIdle.g; colors[k + 2] = COLORS.edgeIdle.b;
@@ -404,8 +446,9 @@ export class NetworkScene {
       let maxAbs = 0;
       for (let e = 0; e < idx.length; e++) {
         const flat = idx[e];
-        let v = W[flat];
-        if (signal) v *= source[flat % inN];
+        let v = base[flat];
+        if (byInput) v *= byInput[flat % inN];
+        if (byOutput) v *= byOutput[Math.floor(flat / inN)];
         values[e] = v;
         const a = Math.abs(v);
         if (a > maxAbs) maxAbs = a;
@@ -420,7 +463,7 @@ export class NetworkScene {
           const o = Math.floor(flat / inN), i = flat - o * inN;
           const connected = (incoming && o === selected.index) || (outgoing && i === selected.index);
           const focus = incoming ? link.fanIn : 1;
-          b = connected ? (t < view.cutoff ? 0 : t * view.brightness * focus) : b * 0.2;
+          b = connected ? (t < view.cutoff ? 0 : t * view.brightness * focus * dim) : b * 0.2;
         }
         const c = v >= 0 ? COLORS.edgePositive : COLORS.edgeNegative;
         const k = e * 8;
