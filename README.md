@@ -2,6 +2,8 @@
 
 Small experiments on how a fully connected neural network's **width** (neurons per hidden layer) and **depth** (number of hidden layers) affect MNIST accuracy, plus an interactive **3D visualizer** that trains networks on the GPU or CPU, shows their weights, activations, and dead neurons live, and walks through a single training step (forward pass, loss, backpropagation, chain rule, gradient descent, and the optimizer) as formulas and as the network's actual numbers.
 
+![The visualizer: orbiting the 3D network, training it, backpropagation stage by stage, and a narrow network of dead ReLUs](demo/neuralnet-demo.gif)
+
 ## Contents
 
 ```
